@@ -68,7 +68,7 @@ void Pyx::Scripting::ScriptingContext::ReloadScripts()
             if (dwAttrib != INVALID_FILE_ATTRIBUTES &&
                 !(dwAttrib & FILE_ATTRIBUTE_DIRECTORY))
             {
-                ScriptDef scriptDef{ fileName };
+                ScriptDef scriptDef(fileName);
                 if (scriptDef.IsScript())
                 {
                     PyxContext::GetInstance().Log(XorStringW(L"[Scripting] Found script \"%s\""), scriptDef.GetName().c_str());

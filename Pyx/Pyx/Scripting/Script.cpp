@@ -28,81 +28,98 @@ Pyx::Scripting::Script::~Script()
 
 void Pyx::Scripting::Script::Stop(bool fireEvent)
 {
-    if (IsRunning())
+    if (m_Mutex.try_lock())
     {
-        PyxContext::GetInstance().Log(L"Stopping script \"%s\" ...", m_name.c_str());
-        if (fireEvent) FireCallback(L"Pyx.OnScriptStop");
-        m_isRunning = false;
-        m_callbacks.clear();
+        if (IsRunning())
+        {
+            PyxContext::GetInstance().Log(L"Stopping script \"%s\" ...", m_name.c_str());
+            if (fireEvent) FireCallback(L"Pyx.OnScriptStop");
+            m_isRunning = false;
+            m_callbacks.clear();
+        }
+        m_Mutex.unlock();
     }
 }
 
 void Pyx::Scripting::Script::Start()
 {
-    if (!IsRunning())
+    if (m_Mutex.try_lock())
     {
-
-        DWORD dwAttrib = GetFileAttributesW(m_defFileName.c_str());
-        if (dwAttrib != INVALID_FILE_ATTRIBUTES && !(dwAttrib & FILE_ATTRIBUTE_DIRECTORY))
+        if (!IsRunning())
         {
 
-            ScriptDef scriptDef(m_defFileName);
-            std::wstring errorMessage;
-            if (scriptDef.Validate(errorMessage))
+            DWORD dwAttrib = GetFileAttributesW(m_defFileName.c_str());
+            if (dwAttrib != INVALID_FILE_ATTRIBUTES && !(dwAttrib & FILE_ATTRIBUTE_DIRECTORY))
             {
 
-                PyxContext::GetInstance().Log(L"Starting script \"%s\" ...", m_name.c_str());
-                m_luaState = LuaState(luaL_newstate());
-                m_luaState.openLibs();
-
-                LuaModules::Override::BindToScript(this);
-                LuaModules::ImGuiLua::BindToScript(this);
-                LuaModules::Pyx_Scripting::BindToScript(this);
-                LuaModules::Pyx_FileSystem::BindToScript(this);
-                LuaModules::Pyx_Win32::BindToScript(this);
-                LuaModules::Pyx_Memory::BindToScript(this);
-                LuaModules::Pyx_Input::BindToScript(this);
-				Pyx::Math::Vector3::BindWithScript(this);
-
-                ScriptingContext::GetInstance().GetOnStartScriptCallbacks().Run(this);
-                m_isRunning = true;
-
-                if (scriptDef.Run(m_luaState))
+                ScriptDef scriptDef(m_defFileName);
+                std::wstring errorMessage;
+                if (scriptDef.Validate(errorMessage))
                 {
-                    FireCallback(L"Pyx.OnScriptStart");
+
+                    PyxContext::GetInstance().Log(L"Starting script \"%s\" ...", m_name.c_str());
+                    m_pLuaState = luaL_newstate();
+                    m_luaState = LuaState(m_pLuaState);
+                    m_luaState.openLibs();
+
+                    LuaModules::Override::BindToScript(this);
+                    LuaModules::ImGuiLua::BindToScript(this);
+                    LuaModules::Pyx_Scripting::BindToScript(this);
+                    LuaModules::Pyx_FileSystem::BindToScript(this);
+                    LuaModules::Pyx_Win32::BindToScript(this);
+                    LuaModules::Pyx_Memory::BindToScript(this);
+                    LuaModules::Pyx_Input::BindToScript(this);
+                    Pyx::Math::Vector3::BindWithScript(this);
+
+                    ScriptingContext::GetInstance().GetOnStartScriptCallbacks().Run(this);
+                    m_isRunning = true;
+
+                    if (scriptDef.Run(m_luaState))
+                    {
+                        FireCallback(L"Pyx.OnScriptStart");
+                    }
+                    else
+                        m_isRunning = false;
+
                 }
                 else
-                    m_isRunning = false;
+                {
+                    PyxContext::GetInstance().Log(L"Error starting script \"%s\"", m_name.c_str());
+                    PyxContext::GetInstance().Log(errorMessage);
+                }
 
             }
-            else
-            {
-                PyxContext::GetInstance().Log(L"Error starting script \"%s\"", m_name.c_str());
-                PyxContext::GetInstance().Log(errorMessage);
-            }
-
         }
+        m_Mutex.unlock();
     }
 }
 
 void Pyx::Scripting::Script::RegisterCallback(const std::wstring& name, LuaRef func)
 {
-    if (m_callbacks.find(name) == m_callbacks.end())
-        m_callbacks.insert(make_pair(name, std::vector<LuaRef>()));
-    m_callbacks[name].push_back(func);
+    if (m_Mutex.try_lock())
+    {
+        if (m_callbacks.find(name) == m_callbacks.end())
+            m_callbacks.insert(make_pair(name, std::vector<LuaRef>()));
+        m_callbacks[name].push_back(func);
+        m_Mutex.unlock();
+    }
 }
 
 void Pyx::Scripting::Script::UnregisterCallback(const std::wstring& name, LuaRef func)
 {
-    for (auto& pair : m_callbacks)
+    if (m_Mutex.try_lock())
     {
-        for (int i = 0; i < pair.second.size(); i++)
+        for (auto& pair : m_callbacks)
         {
-            if (pair.first == name && pair.second[i].isIdenticalTo(func))
+            for (int i = 0; i < pair.second.size(); i++)
             {
-                pair.second.erase(pair.second.begin() + i);
-                return;
+                if (pair.first == name && pair.second[i].isIdenticalTo(func))
+                {
+                    pair.second.erase(pair.second.begin() + i);
+                    return;
+                }
             }
         }
+        m_Mutex.unlock();
     }
 }

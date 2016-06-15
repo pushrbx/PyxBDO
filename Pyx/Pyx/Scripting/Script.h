@@ -6,6 +6,8 @@
 #include <Lua/lua.hpp>
 #include <Lua/LuaIntf.h>
 #include <Pyx/Utility/String.h>
+#include <string>
+#include <windows.h>
 
 #define LUAINTF_ADD_ENUM_VALUE(state, constant) \
     state.push((int)constant); \
@@ -33,7 +35,8 @@ namespace Pyx
             bool m_isRunning = false;
             std::map<std::wstring, std::vector<LuaRef>> m_callbacks;
             LuaState m_luaState;
-            std::recursive_mutex m_callbacksMutex;
+            lua_State* m_pLuaState = nullptr;
+            std::recursive_mutex m_Mutex;
 
         public:
             Script(const std::wstring& name, const std::wstring& defFileName);
@@ -50,29 +53,46 @@ namespace Pyx
             void UnregisterCallback(const std::wstring& name, LuaRef func);
 
         public:
-            template<typename... Args>
-            void FireCallback(const std::wstring& name, Args&&... args)
+            template <typename P0, typename... P>
+            static void pushArg(lua_State* L, P0&& p0, P&&... p)
             {
-                auto find = m_callbacks.find(name);
-                if (find != m_callbacks.end())
+                Lua::push(L, std::forward<P0>(p0));
+                pushArg(L, std::forward<P>(p)...);
+            }
+            static void pushArg(lua_State*)
+            {
+                // template terminate function
+            }
+            template<typename... Args>
+            void FireCallback(const std::wstring& name, Args... args)
+            {
+                if (m_Mutex.try_lock())
                 {
-                    for (auto t_func : find->second)
+                    auto find = m_callbacks.find(name);
+                    if (find != m_callbacks.end())
                     {
-                        try
+                        for (auto& f : find->second)
                         {
-                            t_func.call(std::forward<Args>(args)...);
-                        }
-                        catch (LuaException &e)
-                        {
-                            PyxContext::GetInstance().Log(XorStringW(L"Error in script \"%s\""), m_name);
-                            PyxContext::GetInstance().Log(e.what());
-                        }
-                        catch (const std::exception &e) 
-                        {
-                            PyxContext::GetInstance().Log(XorStringW(L"Error in script \"%s\""), m_name);
-                            PyxContext::GetInstance().Log(e.what());
+                            lua_State* L = m_luaState;
+                            lua_pushcfunction(L, &LuaException::traceback);
+                            f.pushToStack();
+                            pushArg(L, std::forward<Args>(args)...);
+                            if (lua_pcall(L, sizeof...(Args), 0, -int(sizeof...(Args)+2)) != LUA_OK) {
+                                lua_remove(L, -2);
+                                std::string luaError;
+                                if (lua_gettop(L) > 0) {
+                                    luaError = lua_tostring(L, -1);
+                                }
+                                else {
+                                    luaError = "Unknown error";
+                                }
+                                PyxContext::GetInstance().Log(XorStringW(L"Error in script \"%s\" in callback \"%s\""), m_name.c_str(), name.c_str());
+                                PyxContext::GetInstance().Log(luaError);
+                            }
+                            lua_pop(L, 1);
                         }
                     }
+                    m_Mutex.unlock();
                 }
             }
 

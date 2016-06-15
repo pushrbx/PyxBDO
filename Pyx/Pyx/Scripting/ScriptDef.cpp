@@ -17,7 +17,7 @@ Pyx::Scripting::ScriptDef::ScriptDef(std::wstring fileName)
 
 const std::wstring Pyx::Scripting::ScriptDef::GetName()
 {
-    for (auto& value : m_scriptSection)
+    for (auto value : m_scriptSection)
         if (value.Key == L"name")
             return value.Value;
     return L"";
@@ -25,7 +25,7 @@ const std::wstring Pyx::Scripting::ScriptDef::GetName()
 
 const std::wstring Pyx::Scripting::ScriptDef::GetType()
 {
-    for (auto& value : m_scriptSection)
+    for (auto value : m_scriptSection)
         if (value.Key == L"type")
             return value.Value;
     return L"";
@@ -34,7 +34,8 @@ const std::wstring Pyx::Scripting::ScriptDef::GetType()
 std::vector<std::wstring> Pyx::Scripting::ScriptDef::GetFiles()
 {
     std::vector<std::wstring> result;
-    for (auto& value : m_filesSection)
+    for (auto value : m_filesSection)
+    {
         if (value.Key == L"file")
         {
             std::wstring pathName = m_scriptDirectory + value.Value;
@@ -42,13 +43,14 @@ std::vector<std::wstring> Pyx::Scripting::ScriptDef::GetFiles()
             GetFullPathNameW(pathName.c_str(), MAX_PATH, fullPathName, nullptr);
             result.push_back(fullPathName);
         }
+    }
     return result;
 }
 
 std::vector<std::wstring> Pyx::Scripting::ScriptDef::GetDependencies()
 {
     std::vector<std::wstring> result;
-    for (auto& value : m_dependenciestSection)
+    for (auto value : m_dependenciestSection)
         if (value.Key == L"file")
         {
             std::wstring pathName = m_scriptDirectory + value.Value;
@@ -64,27 +66,26 @@ bool Pyx::Scripting::ScriptDef::Validate(std::wstring& error)
 
     for (auto dep : GetDependencies())
     {
-
-        DWORD dwAttrib = GetFileAttributesW(dep.c_str());
-        if (dwAttrib != INVALID_FILE_ATTRIBUTES && !(dwAttrib & FILE_ATTRIBUTE_DIRECTORY))
+        if (PathFileExistsW(dep.c_str()) == TRUE)
         {
-            ScriptDef def{ dep };
+            ScriptDef def(dep);
             if (!def.Validate(error))
                 return false;
         }
         else
         {
-            error = L"[" + GetName() + L"] File not found : " + dep;
+            auto lastError = GetLastError();
+            error = L"[" + GetName() + L"] File not found : " + dep + L" (" + std::to_wstring(lastError) + L")";
             return false;
         }
     }
 
     for (auto file : GetFiles())
     {
-        DWORD dwAttrib = GetFileAttributesW(file.c_str());
-        if (dwAttrib == INVALID_FILE_ATTRIBUTES || (dwAttrib & FILE_ATTRIBUTE_DIRECTORY))
+        if (PathFileExistsW(file.c_str()) == FALSE)
         {
-            error = L"[" + GetName() + L"] File not found : " + file;
+            auto lastError = GetLastError();
+            error = L"[" + GetName() + L"] File not found : " + file + L" (" + std::to_wstring(lastError) + L")";
             return false;
         }
     }
@@ -97,7 +98,7 @@ bool Pyx::Scripting::ScriptDef::Run(LuaIntf::LuaState& luaState)
 {
     for (auto dep : GetDependencies())
     {
-        ScriptDef def{ dep };
+        ScriptDef def(dep);
         if (!def.Run(luaState))
         {
             return false;
@@ -106,26 +107,20 @@ bool Pyx::Scripting::ScriptDef::Run(LuaIntf::LuaState& luaState)
 
     for (auto file : GetFiles())
     {
-        try
+
+        std::fstream fs;
+        fs.open(file, std::ios::in);
+        std::string content((std::istreambuf_iterator<char>(fs)), (std::istreambuf_iterator<char>()));
+        if (luaState.doString(content.c_str()))
         {
-            std::fstream fs;
-            fs.open(file, std::ios::in);
-            std::string content((std::istreambuf_iterator<char>(fs)), (std::istreambuf_iterator<char>()));
-            if (luaState.doString(content.c_str()))
-            {
-                PyxContext::GetInstance().Log(L"Error fin file : \"" + file + L"\" :");
-                std::string error = luaState.getString(-1);
-                PyxContext::GetInstance().Log(error);
-                return false;
-            }
-        }
-        catch (const std::exception &e) {
-            PyxContext::GetInstance().Log(L"Error fin file : \"" + file + L"\" :");
-            PyxContext::GetInstance().Log(e.what());
+            PyxContext::GetInstance().Log(L"Error in file : \"" + file + L"\" :");
+            std::string error = luaState.getString(-1);
+            PyxContext::GetInstance().Log(error);
             return false;
         }
 
     }
 
     return true;
+
 }
